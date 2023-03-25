@@ -34,5 +34,4 @@ export type EditorProps = {
 export type EditorState = {
   doc: Doc | null;
   array: YArray<Element> | null;
-  socket:WebSocket|null
 };

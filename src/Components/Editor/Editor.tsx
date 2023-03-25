@@ -12,6 +12,7 @@ import {
   findCursorInsertPosOffset,
 } from "../../utils";
 import { EditorDisplay } from "./EditorDisplay";
+import { Doc } from "yjs";
 
 export const Editor = ({
   id,
@@ -25,10 +26,8 @@ export const Editor = ({
   const [state, setState] = useState<EditorState>({
     doc: null,
     array: null,
-    socket:null 
   });
   const [socket, setSocket] = useState<WebSocket | null>(null);
-
 
   const handleOperation = (operation: Operation | null) => {
     if (operation === null) return;
@@ -56,80 +55,96 @@ export const Editor = ({
         console.log("operation not implemented");
     }
   };
-  useEffect(() => {
-    const doc = new Y.Doc();
-    const array = doc.getArray<Element>(editorName);
-    
-    doc.on("update", ()=>{
-      console.log(doc);
-    })
 
-
-    array.observe(() => {
-      setDupArray(array.toJSON()); 
-      const encodedStateUpdate:Uint8Array = Y.encodeStateAsUpdate(doc); 
-      socket.send(encodedStateUpdate); 
-    });
-
+  const connectWebSocket = (doc: Doc) => {
     const socket = new WebSocket(backendURL);
     socket.binaryType = "arraybuffer";
 
-    socket.addEventListener('open', () => {
-      console.log('WebSocket connection opened');
-      setSocket(socket);
-    });
+    socket.onopen = () => {
+      console.log("WebSocket connection opened");
+      const encodedStateUpdate: Uint8Array = Y.encodeStateAsUpdate(doc);
+      socket.send(encodedStateUpdate);
+    };
 
-    socket.addEventListener('close', () => {
-      console.log('WebSocket connection closed');
+    socket.onclose = () => {
+      console.log("WebSocket connection closed");
       setSocket(null);
-    });
 
-    socket.addEventListener("message", (event)=>{
-      console.log("doc change")
-      const data = JSON.parse(event.data); 
+      setTimeout(() => {
+        const ws = connectWebSocket(doc);
+        setSocket(ws);
+      }, 1000);
+    };
+
+    socket.onmessage = (event) => {
+      console.log("doc change");
+      const data = JSON.parse(event.data);
       console.log(data);
-      if(!data.type){
-        console.log("Some error in the message syncing"); 
-        return; 
+      if (!data.type) {
+        console.log("Some error in the message syncing");
+        return;
       }
 
-      
-      let uint8Array; 
-      switch(data.type){
-        
+      let uint8Array;
+      switch (data.type) {
         case "update":
           uint8Array = new Uint8Array(data.uint8Array.data);
-          console.log("update", data.uint8Array.data); 
-          if(doc) {
+          console.log("update", data.uint8Array.data);
+          if (doc) {
             Y.applyUpdate(doc, uint8Array);
           }
-        break;
+          break;
 
         case "init":
-          uint8Array = new Uint8Array(data.uint8Array.data); 
-          if(doc) {
+          uint8Array = new Uint8Array(data.uint8Array.data);
+          if (doc) {
             Y.applyUpdate(doc, uint8Array);
           }
-        break;
+          break;
 
         default:
-          console.log("default message"); 
-      }
-      
-
-       
-    })
-    
-    setState({doc, array, socket});
-
-
-    return () => {
-      if (socket) {
-        socket.close();
-        setSocket(null);
+          console.log("default message");
       }
     };
+
+    return socket;
+  };
+
+  const sendUpdates = (doc: Doc, socket: WebSocket | null) => {
+    const encodedStateUpdate: Uint8Array = Y.encodeStateAsUpdate(doc);
+    if (!socket) {
+      console.log("socket null");
+      return;
+    }
+    socket.send(encodedStateUpdate);
+  };
+
+  useEffect(() => {
+    const doc = new Y.Doc();
+    const array = doc.getArray<Element>(editorName);
+    const ws = connectWebSocket(doc);
+
+    doc.on("update", () => {});
+
+    array.observe(() => {
+      setDupArray(array.toJSON());
+      sendUpdates(doc, ws);
+    });
+
+    setSocket(ws);
+    setState({ doc, array });
   }, []);
+
+  useEffect(() => {
+    if (!socket || !state.array || !state.doc) {
+      return;
+    }
+
+    state.array.observe(() => {
+      setDupArray(state.array!.toJSON());
+      sendUpdates(state.doc!, socket);
+    });
+  }, [socket, state]);
 
   useEffect(() => {
     if (textRef === null || textRef.current === null) return;
