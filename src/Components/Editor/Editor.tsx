@@ -13,6 +13,7 @@ import {
 } from "../../utils";
 import { EditorDisplay } from "./EditorDisplay";
 import { Doc } from "yjs";
+import { Buffer } from "buffer";
 
 export const Editor = ({
   id,
@@ -54,6 +55,8 @@ export const Editor = ({
       default:
         console.log("operation not implemented");
     }
+
+    sendUpdates(state.doc!, socket);
   };
 
   const connectWebSocket = (doc: Doc) => {
@@ -63,7 +66,9 @@ export const Editor = ({
     socket.onopen = () => {
       console.log("WebSocket connection opened");
       const encodedStateUpdate: Uint8Array = Y.encodeStateAsUpdate(doc);
-      socket.send(encodedStateUpdate);
+      const stateBuffer = Buffer.from(encodedStateUpdate.buffer);
+      socket.send(JSON.stringify({ type: "update", state: stateBuffer }));
+      socket.send(JSON.stringify({ type: "cursor", state: id }));
     };
 
     socket.onclose = () => {
@@ -79,31 +84,22 @@ export const Editor = ({
     socket.onmessage = (event) => {
       console.log("doc change");
       const data = JSON.parse(event.data);
-      console.log(data);
+      // console.log(data);
       if (!data.type) {
         console.log("Some error in the message syncing");
         return;
       }
 
-      let uint8Array;
+      let state;
       switch (data.type) {
-        case "update":
-          uint8Array = new Uint8Array(data.uint8Array.data);
-          console.log("update", data.uint8Array.data);
-          if (doc) {
-            Y.applyUpdate(doc, uint8Array);
-          }
-          break;
-
-        case "init":
-          uint8Array = new Uint8Array(data.uint8Array.data);
-          if (doc) {
-            Y.applyUpdate(doc, uint8Array);
-          }
-          break;
-
         default:
-          console.log("default message");
+          state = new Uint8Array(data.state.data);
+          console.log(data);
+          // console.log(state);
+          if (doc) {
+            Y.applyUpdate(doc, state);
+            console.log("updated array: ", doc.share.get("editor-1")?.toJSON());
+          }
       }
     };
 
@@ -116,7 +112,12 @@ export const Editor = ({
       console.log("socket null");
       return;
     }
-    socket.send(encodedStateUpdate);
+    const stateBuffer = Buffer.from(encodedStateUpdate.buffer);
+    try {
+      socket.send(JSON.stringify({ type: "update", state: stateBuffer }));
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   useEffect(() => {
@@ -124,11 +125,12 @@ export const Editor = ({
     const array = doc.getArray<Element>(editorName);
     const ws = connectWebSocket(doc);
 
-    doc.on("update", () => {});
+    doc.on("update", () => {
+      console.log("document updated");
+    });
 
     array.observe(() => {
       setDupArray(array.toJSON());
-      sendUpdates(doc, ws);
     });
 
     setSocket(ws);
@@ -142,7 +144,6 @@ export const Editor = ({
 
     state.array.observe(() => {
       setDupArray(state.array!.toJSON());
-      sendUpdates(state.doc!, socket);
     });
   }, [socket, state]);
 
@@ -173,20 +174,24 @@ export const Editor = ({
           spellCheck={false}
           value={elArraytoString(dupArray)}
           onClick={() => {
-            if (!textRef.current) return;
-            deleteCursorFromYArray(state.array, id);
+            try {
+              if (!textRef.current) return;
+              deleteCursorFromYArray(state.array, id);
 
-            const insertPos =
-              textRef.current.selectionStart +
-              findCursorInsertPosOffset(
-                state.array,
-                textRef.current.selectionStart
-              );
-            insertToYArray(state.array, insertPos, {
-              id,
-              type: "cursor",
-              color: colorScheme,
-            });
+              const insertPos =
+                textRef.current.selectionStart +
+                findCursorInsertPosOffset(
+                  state.array,
+                  textRef.current.selectionStart
+                );
+              insertToYArray(state.array, insertPos, {
+                id,
+                type: "cursor",
+                color: colorScheme,
+              });
+            } catch (e) {
+              console.log(e);
+            }
           }}
           onKeyDown={(event) => {
             event.preventDefault();
